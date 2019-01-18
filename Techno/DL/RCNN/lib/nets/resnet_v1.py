@@ -24,7 +24,7 @@ from tensorflow.contrib.layers.python.layers import layers
 from lib.config import config as cfg
 
 def resnet_arg_scope(is_training=True,
-                     weight_decay=cfg.TRAIN.WEIGHT_DECAY,
+                     # weight_decay=cfg.TRAIN.WEIGHT_DECAY,
                      batch_norm_decay=0.997,
                      batch_norm_epsilon=1e-5,
                      batch_norm_scale=True):
@@ -35,13 +35,13 @@ def resnet_arg_scope(is_training=True,
     'decay': batch_norm_decay,
     'epsilon': batch_norm_epsilon,
     'scale': batch_norm_scale,
-    'trainable': cfg.RESNET.BN_TRAIN,
+    'trainable': cfg.FLAGS.BN_TRAIN,
     'updates_collections': ops.GraphKeys.UPDATE_OPS
   }
 
   with arg_scope(
       [slim.conv2d],
-      weights_regularizer=regularizers.l2_regularizer(weight_decay),
+      weights_regularizer=regularizers.l2_regularizer(cfg.FLAGS.weight_decay),
       weights_initializer=initializers.variance_scaling_initializer(),
       trainable=is_training,
       activation_fn=nn_ops.relu,
@@ -55,6 +55,7 @@ class resnetv1(Network):
     Network.__init__(self, batch_size=batch_size)
     self._num_layers = num_layers
     self._resnet_scope = 'resnet_v1_%d' % num_layers
+    print('build_network init, _num_layers', self._num_layers)
 
   def _crop_pool_layer(self, bottom, rois, name):
     with tf.variable_scope(name) as scope:
@@ -69,7 +70,7 @@ class resnetv1(Network):
       y2 = tf.slice(rois, [0, 4], [-1, 1], name="y2") / height
       # Won't be backpropagated to rois anyway, but to save time
       bboxes = tf.stop_gradient(tf.concat([y1, x1, y2, x2], 1))
-      if cfg.RESNET.MAX_POOL:
+      if cfg.FLAGS.MAX_POOL:
         pre_pool_size = cfg.POOLING_SIZE * 2
         crops = tf.image.crop_and_resize(bottom, bboxes, tf.to_int32(batch_ids), [pre_pool_size, pre_pool_size],
                                          name="crops")
@@ -91,35 +92,60 @@ class resnetv1(Network):
 
   def build_network(self, sess, is_training=True):
     # select initializers
-    if cfg.TRAIN.TRUNCATED:
-      initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.01)
-      initializer_bbox = tf.truncated_normal_initializer(mean=0.0, stddev=0.001)
+
+
+
+    if cfg.FLAGS.TRUNCATED:
+       initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.01)
+       initializer_bbox = tf.truncated_normal_initializer(mean=0.0, stddev=0.001)
     else:
-      initializer = tf.random_normal_initializer(mean=0.0, stddev=0.01)
-      initializer_bbox = tf.random_normal_initializer(mean=0.0, stddev=0.001)
+        initializer = tf.random_normal_initializer(mean=0.0, stddev=0.01)
+        initializer_bbox = tf.random_normal_initializer(mean=0.0, stddev=0.001)
+
     bottleneck = resnet_v1.bottleneck
+    print('build_network, _num_layers',self._num_layers)
     # choose different blocks for different number of layers
     if self._num_layers == 50:
-      blocks = [
-        resnet_utils.Block('block1', bottleneck,
-                           [(256, 64, 1)] * 2 + [(256, 64, 2)]),
-        resnet_utils.Block('block2', bottleneck,
-                           [(512, 128, 1)] * 3 + [(512, 128, 2)]),
-        # Use stride-1 for the last conv4 layer
-        resnet_utils.Block('block3', bottleneck,
-                           [(1024, 256, 1)] * 5 + [(1024, 256, 1)]),
-        resnet_utils.Block('block4', bottleneck, [(2048, 512, 1)] * 3)
-      ]
+        ''' modify by jack at 20190115 for error below:
+                            net = block.unit_fn(net, rate=1, **unit)
+                            TypeError: bottleneck() argument after ** must be a mapping, not tuple
+        '''
+        # blocks = [
+        #   resnet_utils.Block('block1', bottleneck,
+        #                      [(256, 64, 1)] * 2 + [(256, 64, 2)]),
+        #   resnet_utils.Block('block2', bottleneck,
+        #                      [(512, 128, 1)] * 3 + [(512, 128, 2)]),
+        #   # Use stride-1 for the last conv4 layer
+        #   resnet_utils.Block('block3', bottleneck,
+        #                      [(1024, 256, 1)] * 5 + [(1024, 256, 1)]),
+        #   resnet_utils.Block('block4', bottleneck, [(2048, 512, 1)] * 3)
+        # ]
+        blocks = [
+          resnet_v1.resnet_v1_block('block1', base_depth=64, num_units=3, stride=2),
+          resnet_v1.resnet_v1_block('block2', base_depth=128, num_units=4, stride=2),
+          resnet_v1.resnet_v1_block('block3', base_depth=256, num_units=6, stride=2),
+          resnet_v1.resnet_v1_block('block4', base_depth=512, num_units=3, stride=1),
+        ]
     elif self._num_layers == 101:
+      ''' modify by jack at 20190115 for error below:
+            net = block.unit_fn(net, rate=1, **unit)
+            TypeError: bottleneck() argument after ** must be a mapping, not tuple
+     '''
+      # blocks = [
+      #   resnet_utils.Block('block1', bottleneck,
+      #                      [(256, 64, 1)] * 2 + [(256, 64, 2)]),
+      #   resnet_utils.Block('block2', bottleneck,
+      #                      [(512, 128, 1)] * 3 + [(512, 128, 2)]),
+      #   # Use stride-1 for the last conv4 layer
+      #   resnet_utils.Block('block3', bottleneck,
+      #                      [(1024, 256, 1)] * 22 + [(1024, 256, 1)]),
+      #   resnet_utils.Block('block4', bottleneck, [(2048, 512, 1)] * 3)
+      # ]
       blocks = [
-        resnet_utils.Block('block1', bottleneck,
-                           [(256, 64, 1)] * 2 + [(256, 64, 2)]),
-        resnet_utils.Block('block2', bottleneck,
-                           [(512, 128, 1)] * 3 + [(512, 128, 2)]),
-        # Use stride-1 for the last conv4 layer
-        resnet_utils.Block('block3', bottleneck,
-                           [(1024, 256, 1)] * 22 + [(1024, 256, 1)]),
-        resnet_utils.Block('block4', bottleneck, [(2048, 512, 1)] * 3)
+          resnet_v1.resnet_v1_block('block1', base_depth=64, num_units=3, stride=2),
+          resnet_v1.resnet_v1_block('block2', base_depth=128, num_units=4, stride=2),
+          resnet_v1.resnet_v1_block('block3', base_depth=256, num_units=23, stride=1),
+          resnet_v1.resnet_v1_block('block4', base_depth=512, num_units=3, stride=1),
       ]
     elif self._num_layers == 152:
       blocks = [
@@ -136,31 +162,31 @@ class resnetv1(Network):
       # other numbers are not supported
       raise NotImplementedError
 
-    assert (0 <= cfg.RESNET.FIXED_BLOCKS < 4)
-    if cfg.RESNET.FIXED_BLOCKS == 3:
+    assert (0 <= cfg.FLAGS.FIXED_BLOCKS < 4)
+    if cfg.FLAGS.FIXED_BLOCKS == 3:
       with slim.arg_scope(resnet_arg_scope(is_training=False)):
         net = self.build_base()
         net_conv4, _ = resnet_v1.resnet_v1(net,
-                                           blocks[0:cfg.RESNET.FIXED_BLOCKS],
+                                           blocks[0:cfg.FLAGS.FIXED_BLOCKS],
                                            global_pool=False,
                                            include_root_block=False,
                                            scope=self._resnet_scope)
-    elif cfg.RESNET.FIXED_BLOCKS > 0:
+    elif cfg.FLAGS.FIXED_BLOCKS > 0:
       with slim.arg_scope(resnet_arg_scope(is_training=False)):
         net = self.build_base()
         net, _ = resnet_v1.resnet_v1(net,
-                                     blocks[0:cfg.RESNET.FIXED_BLOCKS],
+                                     blocks[0:cfg.FLAGS.FIXED_BLOCKS],
                                      global_pool=False,
                                      include_root_block=False,
                                      scope=self._resnet_scope)
 
       with slim.arg_scope(resnet_arg_scope(is_training=is_training)):
         net_conv4, _ = resnet_v1.resnet_v1(net,
-                                           blocks[cfg.RESNET.FIXED_BLOCKS:-1],
+                                           blocks[cfg.FLAGS.FIXED_BLOCKS:-1],
                                            global_pool=False,
                                            include_root_block=False,
                                            scope=self._resnet_scope)
-    else:  # cfg.RESNET.FIXED_BLOCKS == 0
+    else:  # cfg.FLAGS.FIXED_BLOCKS == 0
       with slim.arg_scope(resnet_arg_scope(is_training=is_training)):
         net = self.build_base()
         net_conv4, _ = resnet_v1.resnet_v1(net,
@@ -196,14 +222,14 @@ class resnetv1(Network):
         with tf.control_dependencies([rpn_labels]):
           rois, _ = self._proposal_target_layer(rois, roi_scores, "rpn_rois")
       else:
-        if cfg.TEST.MODE == 'nms':
+        if cfg.FLAGS.test_mode == 'nms':
           rois, _ = self._proposal_layer(rpn_cls_prob, rpn_bbox_pred, "rois")
-        elif cfg.TEST.MODE == 'top':
+        elif cfg.FLAGS.test_mode == 'top':
           rois, _ = self._proposal_top_layer(rpn_cls_prob, rpn_bbox_pred, "rois")
         else:
           raise NotImplementedError
 
-      # rcnn
+      # for rcnn
       if cfg.POOLING_MODE == 'crop':
         pool5 = self._crop_pool_layer(net_conv4, rois, "pool5")
       else:
@@ -243,11 +269,12 @@ class resnetv1(Network):
 
     for v in variables:
       # exclude the first conv layer to swap RGB to BGR
+      #  print('v.name',v.name,'var_keep_dic',var_keep_dic)
       if v.name == (self._resnet_scope + '/conv1/weights:0'):
         self._variables_to_fix[v.name] = v
         continue
       if v.name.split(':')[0] in var_keep_dic:
-        print('Varibles restored: %s' % v.name)
+        # print('Varibles restored: %s' % v.name)
         variables_to_restore.append(v)
 
     return variables_to_restore

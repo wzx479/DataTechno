@@ -28,6 +28,8 @@ from lib.utils.test import im_detect
 #from nets.resnet_v1 import resnetv1
 from lib.nets.vgg16 import vgg16
 from lib.utils.timer import Timer
+from lib.nets.resnet_v1 import resnetv1  #add by jack at 20190115
+from lib.nets.mobilenet_v1 import mobilenetv1 #add by jack at 20190115
 
 CLASSES = ('__background__',
            'aeroplane', 'bicycle', 'bird', 'boat',
@@ -36,7 +38,7 @@ CLASSES = ('__background__',
            'motorbike', 'person', 'pottedplant',
            'sheep', 'sofa', 'train', 'tvmonitor')
 
-NETS = {'vgg16': ('vgg16_faster_rcnn_iter_70000.ckpt',), 'res101': ('res101_faster_rcnn_iter_110000.ckpt',)}
+NETS = {'vgg16': ('vgg16_faster_rcnn_iter_40000.ckpt',), 'res101': ('res101_faster_rcnn_iter_40000.ckpt',)}
 DATASETS = {'pascal_voc': ('voc_2007_trainval',), 'pascal_voc_0712': ('voc_2007_trainval+voc_2012_trainval',)}
 
 
@@ -60,7 +62,7 @@ def vis_detections(im, class_name, dets, thresh=0.5):
                           edgecolor='red', linewidth=3.5)
         )
         ax.text(bbox[0], bbox[1] - 2,
-                '{:s} {:.3f}'.format(class_name, score),
+                '{:s} {:.3f}'.format(class_name, score), #print score
                 bbox=dict(facecolor='blue', alpha=0.5),
                 fontsize=14, color='white')
 
@@ -120,7 +122,12 @@ if __name__ == '__main__':
     demonet = args.demo_net
     dataset = args.dataset
     #tfmodel = os.path.join('output', demonet, DATASETS[dataset][0], 'default', NETS[demonet][0])
-    tfmodel = './default/voc_2007_trainval/default/vgg16_faster_rcnn_iter_40000.ckpt'
+    if demonet == "vgg16":
+        tfmodel = './default/voc_2007_trainval/default/vgg16_faster_rcnn_iter_40000.ckpt'
+    elif demonet == "res101":
+        tfmodel = './default/voc_2007_trainval/default/res101_faster_rcnn_iter_40000.ckpt'
+    else:
+        raise NotImplementedError
     """
     if not os.path.isfile(tfmodel):
         print(tfmodel)
@@ -137,13 +144,15 @@ if __name__ == '__main__':
     # load network
     if demonet == 'vgg16':
         net = vgg16(batch_size=1)
-    # elif demonet == 'res101':
-        # net = resnetv1(batch_size=1, num_layers=101)
+    elif demonet == 'res101':
+        net = resnetv1(batch_size=1, num_layers=101)
     else:
         raise NotImplementedError
     net.create_architecture(sess, "TEST", 21,
                             tag='default', anchor_scales=[8, 16, 32])
     saver = tf.train.Saver()
+
+    # read from the pre-store ckpt file
     saver.restore(sess, tfmodel)
 
     print('Loaded network {:s}'.format(tfmodel))
