@@ -49,6 +49,7 @@ def generate_anchors(base_size=16, ratios=[0.5, 1, 2],
     ratio_anchors = _ratio_enum(base_anchor, ratios)
     anchors = np.vstack([_scale_enum(ratio_anchors[i, :], scales)
                          for i in range(ratio_anchors.shape[0])])
+
     return anchors
 
 
@@ -86,10 +87,15 @@ def _ratio_enum(anchor, ratios):
 
     w, h, x_ctr, y_ctr = _whctrs(anchor)
     size = w * h
+    # 不同比例的面积
     size_ratios = size / ratios
+    # 开根号，≈ 边长
     ws = np.round(np.sqrt(size_ratios))
+    # 不同比例
     hs = np.round(ws * ratios)
+
     anchors = _mkanchors(ws, hs, x_ctr, y_ctr)
+
     return anchors
 
 

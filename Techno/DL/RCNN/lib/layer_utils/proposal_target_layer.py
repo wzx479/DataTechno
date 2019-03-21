@@ -28,8 +28,11 @@ def proposal_target_layer(rpn_rois, rpn_scores, gt_boxes, _num_classes):
     all_scores = rpn_scores
 
     # Include ground-truth boxes in the set of candidate rois
+    # 将ground truth框加入到待分类的框里面(相当于增加正样本个数)
     if cfg.FLAGS.proposal_use_gt:
         zeros = np.zeros((gt_boxes.shape[0], 1), dtype=gt_boxes.dtype)
+
+        #前一维表示是从RPN的输出选出的框和ground truth框合在一起了
         all_rois = np.vstack(
             (all_rois, np.hstack((zeros, gt_boxes[:, :-1])))
         )
@@ -55,7 +58,7 @@ def proposal_target_layer(rpn_rois, rpn_scores, gt_boxes, _num_classes):
 
     return rois, roi_scores, labels, bbox_targets, bbox_inside_weights, bbox_outside_weights
 
-
+# 求得最终计算loss时使用的ground truth边框回归值和bbox_inside_weights
 def _get_bbox_regression_labels(bbox_target_data, num_classes):
     """Bounding-box regression targets (bbox_target_data) are stored in a
     compact form N x (class, tx, ty, tw, th)
@@ -71,13 +74,13 @@ def _get_bbox_regression_labels(bbox_target_data, num_classes):
     clss = bbox_target_data[:, 0]
     bbox_targets = np.zeros((clss.size, 4 * num_classes), dtype=np.float32)
     bbox_inside_weights = np.zeros(bbox_targets.shape, dtype=np.float32)
-    inds = np.where(clss > 0)[0]
-    for ind in inds:
-        cls = clss[ind]
-        start = int(4 * cls)
+    inds = np.where(clss > 0)[0] #找到属于前景的rois
+    for ind in inds: #针对每一个前景roi:
+        cls = clss[ind] #找到从属的类别
+        start = int(4 * cls) #找到从属的类别对应的坐标回归值的起始位置
         end = start + 4
-        bbox_targets[ind, start:end] = bbox_target_data[ind, 1:]
-        bbox_inside_weights[ind, start:end] = cfg.FLAGS2["bbox_inside_weights"]
+        bbox_targets[ind, start:end] = bbox_target_data[ind, 1:] #在对应类的坐标回归上置相应的值
+        bbox_inside_weights[ind, start:end] = cfg.FLAGS2["bbox_inside_weights"] #将bbox_inside_weights上的对应类的坐标回归值置1
     return bbox_targets, bbox_inside_weights
 
 
@@ -101,7 +104,7 @@ def _sample_rois(all_rois, all_scores, gt_boxes, fg_rois_per_image, rois_per_ima
     """Generate a random sample of RoIs comprising foreground and background
     examples.
     """
-    # overlaps: (rois x gt_boxes)
+    # overlaps: (rois x gt_boxes) #计算所有roi和ground truth框之间的重合度
     overlaps = bbox_overlaps(
         np.ascontiguousarray(all_rois[:, 1:5], dtype=np.float),
         np.ascontiguousarray(gt_boxes[:, :4], dtype=np.float))
@@ -145,9 +148,9 @@ def _sample_rois(all_rois, all_scores, gt_boxes, fg_rois_per_image, rois_per_ima
     roi_scores = all_scores[keep_inds]
 
     bbox_target_data = _compute_targets(
-        rois[:, 1:5], gt_boxes[gt_assignment[keep_inds], :4], labels)
+        rois[:, 1:5], gt_boxes[gt_assignment[keep_inds], :4], labels) #得到最终保留的框的类别ground truth值和坐标变换ground truth值
 
     bbox_targets, bbox_inside_weights = \
-        _get_bbox_regression_labels(bbox_target_data, num_classes)
+        _get_bbox_regression_labels(bbox_target_data, num_classes) #得到最终计算loss时使用的ground truth边框回归值和bbox_inside_weights
 
     return labels, rois, roi_scores, bbox_targets, bbox_inside_weights

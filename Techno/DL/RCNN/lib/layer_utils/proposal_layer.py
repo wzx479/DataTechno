@@ -30,9 +30,12 @@ def proposal_layer(rpn_cls_prob, rpn_bbox_pred, im_info, cfg_key, _feat_stride, 
         nms_thresh = cfg.FLAGS.rpn_test_nms_thresh
 
     im_info = im_info[0]
-    # Get the scores and bounding boxes
+    # Get the scores value of classification£º
     scores = rpn_cls_prob[:, :, :, num_anchors:]
+    # Get bounding boxes probablity of regression£º
     rpn_bbox_pred = rpn_bbox_pred.reshape((-1, 4))
+
+
     scores = scores.reshape((-1, 1))
     proposals = bbox_transform_inv(anchors, rpn_bbox_pred)
     proposals = clip_boxes(proposals, im_info[:2])

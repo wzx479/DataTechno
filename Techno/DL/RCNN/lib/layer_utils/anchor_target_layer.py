@@ -15,7 +15,7 @@ from lib.utils.cython_bbox import bbox_overlaps
 from lib.config import config as cfg
 from lib.utils.bbox_transform import bbox_transform
 
-
+#该函数计算每个anchor对应的ground truth(前景/背景，坐标偏移值)
 def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anchors, num_anchors):
     """Same as the anchor target layer in original Fast/er RCNN """
     A = num_anchors
@@ -30,6 +30,7 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
     height, width = rpn_cls_score.shape[1:3]
 
     # only keep anchors inside the image
+    # 2 inds_inside = 所有的anchor中x1,y1,x2,y2没有超过图像边界的。
     inds_inside = np.where(
         (all_anchors[:, 0] >= -_allowed_border) &
         (all_anchors[:, 1] >= -_allowed_border) &
@@ -41,43 +42,52 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
     anchors = all_anchors[inds_inside, :]
 
     # label: 1 is positive, 0 is negative, -1 is dont care
+    # labels 字段的长度就是合法的anchor的个数
+    # 先用-1填充labels
     labels = np.empty((len(inds_inside),), dtype=np.float32)
     labels.fill(-1)
 
-    # overlaps between the anchors and the gt boxes
+    # overlaps between the anchors and the gt boxes ，
+    # 3 根据预设阈值和overlap重叠率，打上前背景标签1|0
+    # bbox_overlaps (）计算anchors与gt_boxes之间的重合度IOU，大于0.7标记为前景图，小于0.3标记为背景图;
+    # 返回类型(n,k),即第n个anchors与第K个gt_boxes的IOU重合度值
     # overlaps (ex, gt)
     overlaps = bbox_overlaps(
         np.ascontiguousarray(anchors, dtype=np.float),
         np.ascontiguousarray(gt_boxes, dtype=np.float))
-    argmax_overlaps = overlaps.argmax(axis=1)
-    max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]
-    gt_argmax_overlaps = overlaps.argmax(axis=0)
-    gt_max_overlaps = overlaps[gt_argmax_overlaps,
-                               np.arange(overlaps.shape[1])]
-    gt_argmax_overlaps = np.where(overlaps == gt_max_overlaps)[0]
+
+    # 4 对于每个anchor，找到与gt_box坐标的IOU的最大值，即找到每个anchors最大重叠率的gt_boxes。
+    argmax_overlaps = overlaps.argmax(axis=1) # ? #
+    max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps] # ? # anchors与gt_boxes最大IoU
+
+    gt_argmax_overlaps = overlaps.argmax(axis=0) # ? #
+    gt_max_overlaps = overlaps[gt_argmax_overlaps,np.arange(overlaps.shape[1])] # ? #
+
+    gt_argmax_overlaps = np.where(overlaps == gt_max_overlaps)[0]#再次对于每个gt_box，找到对应的最大overlap的anchor。shape[len(gt_boxes),]
 
     if not cfg.FLAGS.rpn_clobber_positives:
         # assign bg labels first so that positive labels can clobber them
-        # first set the negatives
+        # first set the negatives , 在这里将anchors与gt_boxes最大IoU仍然小于阈值(0.3)的某些anchor置0
         labels[max_overlaps < cfg.FLAGS.rpn_negative_overlap] = 0
 
     # fg label: for each gt, anchor with highest overlap
     labels[gt_argmax_overlaps] = 1
 
-    # fg label: above threshold IOU
+    # fg label: above threshold IOU , 在这里将anchors与gt_boxes最大IoU大于阈值(0.7)的某些anchor置1
     labels[max_overlaps >= cfg.FLAGS.rpn_positive_overlap] = 1
 
     if cfg.FLAGS.rpn_clobber_positives:
         # assign bg labels last so that negative labels can clobber positives
         labels[max_overlaps < cfg.FLAGS.rpn_negative_overlap] = 0
 
+    # 5 随机抛弃一些前景anchor和背景anchors. 二次采样
     # subsample positive labels if we have too many
     num_fg = int(cfg.FLAGS.rpn_fg_fraction * cfg.FLAGS.rpn_batchsize)
     fg_inds = np.where(labels == 1)[0]
     if len(fg_inds) > num_fg:
         disable_inds = npr.choice(
             fg_inds, size=(len(fg_inds) - num_fg), replace=False)
-        labels[disable_inds] = -1
+        labels[disable_inds] = -1 #如果事实存在的前景anchor大于了所需值，就随机抛弃一些前景anchor
 
     # subsample negative labels if we have too many
     num_bg = cfg.FLAGS.rpn_batchsize - np.sum(labels == 1)
@@ -87,13 +97,22 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
             bg_inds, size=(len(bg_inds) - num_bg), replace=False)
         labels[disable_inds] = -1
 
+    # 6 使用bbox_transform函数，计算每个anchor与最大的overlap的gt_boxes的框偏移量，
+    # 作为位移量的标签值(tx,ty,th,tw)用于后续框回归
+    # bbox_targets = np.zeros((len(inds_inside), 4), dtype=np.float32)  # 对每个在原图内部的anchor,用全0初始化坐标变换值
     bbox_targets = _compute_targets(anchors, gt_boxes[argmax_overlaps, :])
 
+
+    # bbox_inside_weights和bbox_outside_weights，这两个数组在训练anchor边框修正时有重大作用
+
+    #7 在进行边框修正loss的计算时，只有前景anchor会起作用，可以看到这是bbox_inside_weights和bbox_outside_weights在实现。
+    # 非前景和背景anchor对应的bbox_inside_weights和bbox_outside_weights都为0  @ https://blog.csdn.net/u012426298/article/details/81517609
     bbox_inside_weights = np.zeros((len(inds_inside), 4), dtype=np.float32)
     # only the positive ones have regression targets
     bbox_inside_weights[labels == 1, :] = np.array(cfg.FLAGS2["bbox_inside_weights"])
-
     bbox_outside_weights = np.zeros((len(inds_inside), 4), dtype=np.float32)
+
+
     if cfg.FLAGS.rpn_positive_weight < 0:
         # uniform weighting of examples (given non-uniform sampling)
         num_examples = np.sum(labels >= 0)
@@ -110,10 +129,11 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
     bbox_outside_weights[labels == 0, :] = negative_weights
 
     # map up to original set of anchors
+    # 8.统一所有的标签，并转化标签labels的格式后，返回
     labels = _unmap(labels, total_anchors, inds_inside, fill=-1)
     bbox_targets = _unmap(bbox_targets, total_anchors, inds_inside, fill=0)
-    bbox_inside_weights = _unmap(bbox_inside_weights, total_anchors, inds_inside, fill=0)
-    bbox_outside_weights = _unmap(bbox_outside_weights, total_anchors, inds_inside, fill=0)
+    bbox_inside_weights = _unmap(bbox_inside_weights, total_anchors, inds_inside, fill=0) # ？ #
+    bbox_outside_weights = _unmap(bbox_outside_weights, total_anchors, inds_inside, fill=0)  # ？ #
 
     # labels
     labels = labels.reshape((1, height, width, A)).transpose(0, 3, 1, 2)
@@ -138,7 +158,7 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
     rpn_bbox_outside_weights = bbox_outside_weights
     return rpn_labels, rpn_bbox_targets, rpn_bbox_inside_weights, rpn_bbox_outside_weights
 
-
+#  _unmap函数 将图像内部的anchor 映射回到生成的所有的anchor
 def _unmap(data, count, inds, fill=0):
     """ Unmap a subset of item (data) back to the original set of items (of
     size count) """
@@ -152,7 +172,7 @@ def _unmap(data, count, inds, fill=0):
         ret[inds, :] = data
     return ret
 
-
+#_compute_targets函数计算anchor和对应的gt_box的位置映射
 def _compute_targets(ex_rois, gt_rois):
     """Compute bounding-box regression targets for an image."""
 
